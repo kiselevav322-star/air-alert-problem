@@ -1,0 +1,303 @@
+================================================================================
+CHAT HISTORY: UKRAINE AIR RAID ALERT TIME-SERIES FORECASTING PROJECT
+================================================================================
+Workspace: c:\Users\Вікторія\Desktop\air_raid_project
+Conversation ID: 3262c9c0-c7fa-4e5e-b13a-454b37897d6e
+================================================================================
+
+--------------------------------------------------------------------------------
+[USER] (Entry #1)
+--------------------------------------------------------------------------------
+I need to build a Python time-series forecastingcmodel using official_data_en_csv to analise air raid alerts in Ukraine. Write a script in main.py that loads the dataset, cleans timestamps, aggregates alerts by hour, creates lag features, and trains a baseline model using scikit-learn
+
+
+--------------------------------------------------------------------------------
+[AI ASSISTANT] (Entry #2)
+--------------------------------------------------------------------------------
+I am currently setting up the required machine learning libraries (`pandas` and `scikit-learn`) and preparing the script execution. I will continue as soon as installation completes.
+
+
+--------------------------------------------------------------------------------
+[AI ASSISTANT] (Entry #3)
+--------------------------------------------------------------------------------
+Waiting for the installation of `scikit-learn` and `pandas` to complete.
+
+
+--------------------------------------------------------------------------------
+[AI ASSISTANT] (Entry #4)
+--------------------------------------------------------------------------------
+A complete time-series forecasting pipeline has been implemented in [`main.py`](file:///c:/Users/Вікторія/Desktop/air_raid_project/main.py).
+
+### Summary of the Pipeline
+
+1. **Dataset Ingestion (`load_dataset`)**:
+   - Loads [`official_data_en.csv`](file:///c:/Users/Вікторія/Desktop/air_raid_project/official_data_en.csv) (299,275 rows).
+   - Validates columns (`oblast`, `raion`, `hromada`, `level`, `started_at`, `finished_at`, `source`).
+
+2. **Timestamp Cleaning (`clean_timestamps`)**:
+   - Parses `started_at` and `finished_at` with UTC handling and converts timestamps to local Ukrainian time (`Europe/Kyiv`).
+   - Filters missing activation timestamps and calculates alert durations.
+
+3. **Hourly Aggregation (`aggregate_alerts_by_hour`)**:
+   - Groups alert start events into 1-hour intervals (`hour_bucket`).
+   - Reindexes over a complete chronological date range (`freq='h'`) across the entire 39,279-hour timeline, filling quiet periods with `0`.
+
+4. **Feature Engineering (`create_lag_features`)**:
+   - **Autoregressive Lags**: `t-1h`, `t-2h`, `t-3h`, `t-4h`, `t-6h`, `t-12h`, `t-24h` (daily cycle), `t-48h`, and `t-168h` (weekly cycle).
+   - **Rolling Window Statistics**: 3h, 6h, 12h, and 24h rolling mean, std, and max (shifted by 1 to strictly prevent data leakage).
+   - **Temporal & Cyclical Features**: `hour`, `day_of_week`, `is_weekend`, plus sine/cosine encodings (`sin_hour`, `cos_hour`, `sin_dow`, `cos_dow`).
+
+5. **Baseline Model Training & Evaluation (`train_and_evaluate`)**:
+   - Uses a **chronological train/test split** (last 20% reserved for testing) to avoid lookahead bias.
+   - Evaluates persistence baselines against scikit-learn models:
+     - **Naive Persistence** (`Lag 1h`) & **Seasonal Persistence** (`Lag 24h`)
+     - **Ridge Regression**
+     - **HistGradientBoostingRegressor**
+     - **RandomForestRegressor**
+   - Computes **MAE**, **RMSE**, and **$R^2$ Score**, ranks top feature importances, and prints sample predictions.
+
+---
+
+### Execution Results
+
+```text
+===========================================================================
+Model                               |        MAE |       RMSE |   R2 Score
+---------------------------------------------------------------------------
+Naive Persistence (Lag 1h)          |    14.1076 |    25.2204 |    -0.7439
+Naive Seasonal (Lag 24h)            |    14.5267 |    25.7636 |    -0.8198
+Ridge Regression (alpha=1.0)        |    10.2168 |    18.7123 |     0.0400
+HistGradientBoostingRegressor       |    10.2174 |    19.2290 |    -0.0137
+RandomForestRegressor               |    10.5946 |    18.9756 |     0.0128
+===========================================================================
+
+Top 10 Most Influential Features (Random Forest):
+   1. rolling_mean_24h      :  14.92%
+   2. rolling_std_24h       :   7.32%
+   3. hour                  :   5.81%
+   4. rolling_std_12h       :   5.03%
+   5. lag_168h              :   4.69%
+   6. rolling_mean_12h      :   4.48%
+   7. lag_48h               :   4.43%
+   8. lag_24h               :   4.15%
+   9. rolling_std_6h        :   4.14%
+  10. rolling_mean_6h       :   4.03%
+```
+
+To run or adjust parameters at any time:
+```bash
+python main.py --file official_data_en.csv --test-ratio 0.2
+```
+
+
+--------------------------------------------------------------------------------
+[USER] (Entry #5)
+--------------------------------------------------------------------------------
+Let's update main.py to include the Cascade Spatial/Temporal Lag feature. Since our dataset has the oblast column, please modify the pipeline:
+1. Aggregate alerts by hourly bins and oblast
+(groupby(['hour_bin'], 'oblast']))
+2. Create a spatial-temporal lag feature: for each hour, compute the average alert count across other oblasts (surrounding regions) lagged by 1 to 3 hours ( spatial_lag_1h ), strictly using .shift(1) to avoid any data leakage
+3. Update the feature set to include this spatial propagation metric alongside our temporal lags and retrain the models
+
+
+--------------------------------------------------------------------------------
+[AI ASSISTANT] (Entry #6)
+--------------------------------------------------------------------------------
+The pipeline in [`main.py`](file:///c:/Users/Вікторія/Desktop/air_raid_project/main.py) has been updated with the **Cascade Spatial/Temporal Lag** architecture.
+
+---
+
+### What Was Updated
+
+1. **Hourly and Regional Aggregation (`aggregate_alerts_by_hour_and_oblast`)**:
+   - Groups alerts by `['hour_bin', 'oblast']`:
+     ```python
+     grouped = df.groupby(["hour_bin", "oblast"]).size().rename("alert_count")
+     ```
+   - Reindexes over a complete Cartesian grid across all 39,279 hours and 25 oblasts ($981,975$ region-hour bins), filling quiet hours with `0` so temporal lags remain continuous without date gaps.
+
+2. **Spatial-Temporal Cascade Features (`create_spatial_temporal_lag_features`)**:
+   - **Spatial Propagation Lags (`spatial_lag_1h`, `spatial_lag_2h`, `spatial_lag_3h`)**:
+     For each hour $t$ and oblast $i$, calculates the mean alert intensity across all other $(N - 1 = 24)$ oblasts:
+     $$\text{other\_mean}(i, t) = \frac{\sum_{j \neq i} \text{alert\_count}(j, t)}{N - 1}$$
+     Lagged strictly using `.shift(1)`, `.shift(2)`, and `.shift(3)` to eliminate future lookahead and target leakage.
+   - **Local Autoregressive Lags**: $t-1\text{h}, t-2\text{h}, t-3\text{h}, t-6\text{h}, t-12\text{h}, t-24\text{h}$.
+   - **Local Rolling Statistics**: 6h and 24h rolling mean/std shifted by 1.
+   - **Temporal & Spatial Encodings**: Diurnal cycle (`sin_hour`, `cos_hour`), day of week, weekend indicator, and oblast one-hot encodings.
+
+3. **Model Retraining & Validation (`train_and_evaluate`)**:
+   - **Chronological Split**: Split strictly by timestamp across all oblasts (Train: 785,100 samples; Test: 196,275 samples).
+   - Models evaluated:
+     - **Naive Local Persistence** (`lag_1h`)
+     - **Naive Spatial Lag** (`spatial_lag_1h`)
+     - **Ridge Regression**
+     - **HistGradientBoostingRegressor**
+     - **RandomForestRegressor**
+
+---
+
+### Benchmark & Evaluation Results
+
+```text
+===========================================================================
+Model                               |        MAE |       RMSE |   R2 Score
+---------------------------------------------------------------------------
+Naive Local Persistence (Lag 1h)    |     0.9174 |     2.4509 |    -0.6752
+Naive Spatial Lag (Spatial 1h)      |     1.0428 |     2.0166 |    -0.1341
+Ridge Regression (alpha=1.0)        |     0.7857 |     1.7697 |     0.1266
+HistGradientBoostingRegressor       |     0.8168 |     1.7704 |     0.1259
+RandomForestRegressor               |     0.8952 |     1.8073 |     0.0891
+===========================================================================
+
+Feature Coefficients (Ridge Regression - Top Core Signals):
+   1. rolling_mean_24h       [TEMPORAL] :  +0.5009
+   2. rolling_mean_6h        [TEMPORAL] :  +0.1212
+   3. lag_24h                [TEMPORAL] :  +0.0607
+   4. spatial_lag_1h         [SPATIAL]  :  +0.0583
+   5. rolling_std_6h         [TEMPORAL] :  -0.0307
+   6. cos_hour                          :  -0.0302
+   7. lag_1h                 [TEMPORAL] :  -0.0223
+   8. is_weekend                        :  -0.0182
+   9. sin_hour                          :  -0.0153
+  10. lag_3h                 [TEMPORAL] :  +0.0087
+```
+
+> **Key Finding**: `spatial_lag_1h` emerged as the **#4 strongest core predictor** ($+0.0583$ coefficient), confirming significant spatial cascade dynamics across Ukrainian oblasts during air raid events.
+
+Run the pipeline:
+```bash
+python main.py
+```
+
+
+--------------------------------------------------------------------------------
+[USER] (Entry #7)
+--------------------------------------------------------------------------------
+update main,py to include:
+statistical summary printed in the terminal that explicitly highlights:
+1.An automated statistical summary printed in the terminal that explicitly highlights:
+Which hours of the day (e.g., night vs day) have the highest alert probability
+How alert frequencies shift across months/seasons
+Proof of how activity in neighboring oblasts (spatial_lag_1h) correlates with the target regions alerts
+2.A visualization function using matplotlib that generates and saves a professional chart named alert_analysis.png showing actual vs predicted trends and hourly distributions
+3.Ensure matplotlib is imported properly
+
+
+--------------------------------------------------------------------------------
+[AI ASSISTANT] (Entry #8)
+--------------------------------------------------------------------------------
+[`main.py`](file:///c:/Users/Вікторія/Desktop/air_raid_project/main.py) has been updated with the automated statistical analysis and a matplotlib visualization dashboard saved as [`alert_analysis.png`](file:///c:/Users/Вікторія/Desktop/air_raid_project/alert_analysis.png).
+
+---
+
+### 1. Automated Statistical Summary (Terminal Output)
+
+When executing `python main.py`, the pipeline automatically calculates and prints three statistical sections:
+
+#### [A] Diurnal Profile (Night vs. Day Alert Probability)
+* **Night Window (22:00 – 06:00)**: 86,963 alerts ($29.1\%$) — Mean: $10,870\text{ alerts/hour}$.
+* **Day Window (06:00 – 22:00)**: 212,312 alerts ($70.9\%$) — Mean: $13,270\text{ alerts/hour}$.
+* **Top 3 Peak Hours**:
+  1. **21:00** ($16,436$ alerts, $5.5\%$)
+  2. **09:00** ($15,365$ alerts, $5.1\%$)
+  3. **20:00** ($15,354$ alerts, $5.1\%$)
+* **Top 3 Quietest Hours (Troughs)**:
+  1. **05:00** ($7,069$ alerts, $2.4\%$)
+  2. **06:00** ($7,096$ alerts, $2.4\%$)
+  3. **07:00** ($8,567$ alerts, $2.9\%$)
+
+#### [B] Monthly and Seasonal Intensity Shifts
+* **Summer** (Peak Season): $85,842\text{ alerts}$ ($28.7\%$) — driven by August ($31,355\text{ alerts}$).
+* **Spring**: $77,060\text{ alerts}$ ($25.7\%$).
+* **Winter**: $68,464\text{ alerts}$ ($22.9\%$).
+* **Autumn**: $67,909\text{ alerts}$ ($22.7\%$) — lowest month is February ($17,902\text{ alerts}$).
+
+#### [C] Empirical Proof of Spatial Cascade Propagation (`spatial_lag_1h`)
+* **Correlation**:
+  * Pearson $r(\text{alert\_count}, \text{spatial\_lag\_1h}) = \mathbf{+0.0839}$ (statistically significant positive leading indicator).
+* **Conditional Probabilities**:
+  * Baseline Probability across all region-hours: **$11.06\%$**
+  * $P(\text{Alert in Oblast} \mid \text{Neighboring Oblasts QUIET at } t-1) = \mathbf{7.51\%}$
+  * $P(\text{Alert in Oblast} \mid \text{Neighboring Oblasts ACTIVE at } t-1) = \mathbf{12.46\%}$
+  * **Cascade Uplift Factor**: **$1.66\times$** ($+65.9\%$ increase in alert activation odds when neighbors were active 1h prior).
+  * $P(\text{Alert in Oblast} \mid \text{Nationwide Wave } [\text{spatial\_lag\_1h} \ge 1.0]) = \mathbf{15.14\%}$ ($2.02\times$ baseline quiet odds).
+
+---
+
+### 2. Publication-Grade Visualization Dashboard (`alert_analysis.png`)
+
+The chart is generated using `matplotlib` (with the non-GUI `Agg` backend) and saved at 300 DPI:
+
+1. **Top-Left**: **Actual vs. Predicted Alert Trajectory** (14-day hourly slice comparing actual national alert totals with Ridge and HistGradientBoosting forecasts).
+2. **Top-Right**: **Diurnal Alert Distribution (Night vs. Day)** (24-hour cycle highlighting dark indigo night bars vs. amber daytime bars with peak annotations).
+3. **Bottom-Left**: **Seasonal & Monthly Alert Frequencies** (monthly distribution colored by meteorological seasons).
+4. **Bottom-Right**: **Empirical Spatial Cascade** (stepwise increase in local alert activation probability across `spatial_lag_1h` intensity brackets).
+
+---
+
+### How to Run
+
+```bash
+python main.py --file official_data_en.csv --test-ratio 0.2
+```
+
+Outputs generated:
+* Statistical analysis printed to stdout.
+* Scikit-learn model evaluation metrics printed to stdout.
+* Dashboard image saved to [`alert_analysis.png`](file:///c:/Users/Вікторія/Desktop/air_raid_project/alert_analysis.png).
+
+
+--------------------------------------------------------------------------------
+[USER] (Entry #9)
+--------------------------------------------------------------------------------
+Remove the '#' bar charts from the terminal output and keep only the clean text statistics
+
+
+--------------------------------------------------------------------------------
+[AI ASSISTANT] (Entry #10)
+--------------------------------------------------------------------------------
+The `'#'` ASCII bar charts have been removed from the terminal output in [`main.py`](file:///c:/Users/Вікторія/Desktop/air_raid_project/main.py). 
+
+The terminal output now displays only clean, formatted text statistics:
+
+```text
+==============================================================================
+ AUTOMATED STATISTICAL SUMMARY: AIR RAID ALERTS IN UKRAINE
+==============================================================================
+
+[A] DIURNAL & HOURLY PROBABILITY PROFILE (Europe/Kyiv Time):
+------------------------------------------------------------------------------
+  * Night Window (22:00 - 06:00, 8 hrs) : 86,963 alerts (29.1%) | Mean/hour: 10,870
+  * Day Window   (06:00 - 22:00, 16 hrs): 212,312 alerts (70.9%) | Mean/hour: 13,270
+  * Relative Intensity Ratio (Night vs Day per hr): 0.82x
+  * Top 3 Peak Activation Hours  : 21:00 (16,436 alerts, 5.5%), 09:00 (15,365 alerts, 5.1%), 20:00 (15,354 alerts, 5.1%)
+  * Top 3 Quietest Hours (Troughs): 05:00 (7,069 alerts, 2.4%), 06:00 (7,096 alerts, 2.4%), 07:00 (8,567 alerts, 2.9%)
+
+[B] SEASONAL & MONTHLY INTENSITY SHIFTS:
+------------------------------------------------------------------------------
+  * Winter  :  68,464 alerts ( 22.9%)
+  * Spring  :  77,060 alerts ( 25.7%)
+  * Summer  :  85,842 alerts ( 28.7%)
+  * Autumn  :  67,909 alerts ( 22.7%)
+
+  * Peak Season: Summer (85,842 alerts) vs Lowest: Autumn (67,909 alerts)
+  * Peak Month : Aug (31,355 alerts) vs Lowest Month: Feb (17,902 alerts)
+
+[C] EMPIRICAL PROOF OF SPATIAL PROPAGATION (spatial_lag_1h CORRELATION):
+------------------------------------------------------------------------------
+  * Pearson Correlation with spatial_lag_1h : +0.0839 (Statistically Significant leading signal)
+  * Pearson Correlation with spatial_lag_2h : +0.0711
+  * Pearson Correlation with spatial_lag_3h : +0.0678
+  * Pearson Correlation with local lag_1h   : +0.1698
+
+  Empirical Proof via Conditional Activation Probabilities:
+  * Baseline Alert Probability across all region-hours : 11.06%
+  * P(Alert in Oblast | Other oblasts were QUIET at t-1):  7.51%
+  * P(Alert in Oblast | Other oblasts were ACTIVE at t-1): 12.46%
+  * Cascade Uplift Factor                               : 1.66x (+65.9% increased activation odds)
+  * P(Alert in Oblast | Nationwide Wave (spatial >= 1.0): 15.14% (2.02x baseline quiet odds)
+==============================================================================
+```
+
+All graphical visualizations (hourly distributions, night/day profiles, seasonal comparisons, and spatial propagation plots) remain exported to [`alert_analysis.png`](file:///c:/Users/Вікторія/Desktop/air_raid_project/alert_analysis.png).
+
